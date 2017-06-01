@@ -15,7 +15,7 @@
 import datetime
 
 from airflow.jobs import BackfillJob
-from airflow.models import DagRun, TaskInstance
+from airflow.models import DagRun, DagStat, TaskInstance
 from airflow.operators.subdag_operator import SubDagOperator
 from airflow.settings import Session
 from airflow.utils.state import State
@@ -181,7 +181,40 @@ def set_state(task, execution_date, upstream=False, downstream=False,
         if len(sub_dag_ids) > 0:
             tis_altered += qry_sub_dag.all()
 
+    session.expunge_all()
     session.close()
 
     return tis_altered
 
+def set_dag_state(dag, execution_date, state=State.SUCCESS, commit=False):
+    """
+    Set the state of a dag run and all task instances associated with the dag
+    run for a specific execution date.
+    :param dag: the DAG of which to alter state
+    :param execution_date: the execution date from which to start looking
+    :param state: the state to which the DAG need to be set
+    :param commit: commit DAG and tasks to be altered to the database
+    :return: list of tasks that have been created and updated
+    :raises: AssertionError if dag or execution_date is invalid
+    """
+    res = []
+
+    if not dag or not execution_date:
+        return res
+
+    # Mark all tasks in the DAG
+    for task in dag.tasks:
+        task.dag = dag
+        new_state = set_state(task=task, execution_date=execution_date,
+                              state=state, commit=commit)
+        res.extend(new_state)
+
+    # Mark the DAG run
+    if commit:
+        drs = DagRun.find(dag.dag_id, execution_date=execution_date)
+        if drs and len(drs) == 1:
+            dr = drs[0]
+            dr.dag = dag
+            dr.update_state()
+
+    return res

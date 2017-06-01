@@ -1034,10 +1034,13 @@ class Airflow(BaseView):
         past = request.args.get('past') == "true"
         recursive = request.args.get('recursive') == "true"
 
-        dag = dag.sub_dag(
-            task_regex=r"^{0}$".format(task_id),
-            include_downstream=downstream,
-            include_upstream=upstream)
+        clear_all = request.args.get('clear_all') == "true"
+
+        if not clear_all:
+            dag = dag.sub_dag(
+                task_regex=r"^{0}$".format(task_id),
+                include_downstream=downstream,
+                include_upstream=upstream)
 
         end_date = execution_date if not future else None
         start_date = execution_date if not past else None
@@ -1092,6 +1095,46 @@ class Airflow(BaseView):
                 'max_active_runs': max_active_runs,
             })
         return wwwutils.json_response(payload)
+
+    @expose('/dag_success')
+    @login_required
+    @wwwutils.action_logging
+    @wwwutils.notify_owner
+    def dag_success(self):
+        dag_id = request.args.get('dag_id')
+        execution_date = request.args.get('execution_date')
+        confirmed = request.args.get('confirmed') == 'true'
+        origin = request.args.get('origin')
+
+        if not execution_date:
+            flash('Invalid execution date', 'error')
+            return redirect(origin)
+
+        execution_date = dateutil.parser.parse(execution_date)
+        dag = dagbag.get_dag(dag_id)
+
+        if not dag:
+            flash('Cannot find DAG: {}'.format(dag_id), 'error')
+            return redirect(origin)
+
+        from airflow.api.common.experimental.mark_tasks import set_dag_state
+
+        new_dag_state = set_dag_state(dag, execution_date, state=State.SUCCESS,
+                                      commit=confirmed)
+
+        if confirmed:
+            flash('Marked success on {} task instances'.format(len(new_dag_state)))
+            return redirect(origin)
+
+        else:
+            details = '\n'.join([str(t) for t in new_dag_state])
+
+            response = self.render('airflow/confirm.html',
+                                   message=("Here's the list of task instances you are "
+                                            "about to mark as successful:"),
+                                   details=details)
+
+            return response
 
     @expose('/success')
     @login_required
