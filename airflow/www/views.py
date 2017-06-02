@@ -1117,9 +1117,9 @@ class Airflow(BaseView):
             flash('Cannot find DAG: {}'.format(dag_id), 'error')
             return redirect(origin)
 
-        from airflow.api.common.experimental.mark_tasks import set_dag_state
+        from airflow.api.common.experimental.mark_tasks import set_dag_run_state
 
-        new_dag_state = set_dag_state(dag, execution_date, state=State.SUCCESS,
+        new_dag_state = set_dag_run_state(dag, execution_date, state=State.SUCCESS,
                                       commit=confirmed)
 
         if confirmed:

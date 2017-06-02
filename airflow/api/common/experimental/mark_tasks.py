@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import datetime
+import logging
 
 from airflow.jobs import BackfillJob
 from airflow.models import DagRun, DagStat, TaskInstance
@@ -21,7 +22,6 @@ from airflow.settings import Session
 from airflow.utils.state import State
 
 from sqlalchemy import or_
-
 
 def _create_dagruns(dag, execution_dates, state, run_id_template):
     """
@@ -186,7 +186,7 @@ def set_state(task, execution_date, upstream=False, downstream=False,
 
     return tis_altered
 
-def set_dag_state(dag, execution_date, state=State.SUCCESS, commit=False):
+def set_dag_run_state(dag, execution_date, state=State.SUCCESS, commit=False):
     """
     Set the state of a dag run and all task instances associated with the dag
     run for a specific execution date.
@@ -202,19 +202,24 @@ def set_dag_state(dag, execution_date, state=State.SUCCESS, commit=False):
     if not dag or not execution_date:
         return res
 
-    # Mark all tasks in the DAG
+    # Mark all task instances in the dag run
     for task in dag.tasks:
         task.dag = dag
         new_state = set_state(task=task, execution_date=execution_date,
                               state=state, commit=commit)
         res.extend(new_state)
 
-    # Mark the DAG run
+    # Mark the dag run
     if commit:
         drs = DagRun.find(dag.dag_id, execution_date=execution_date)
         if drs and len(drs) == 1:
             dr = drs[0]
             dr.dag = dag
             dr.update_state()
+        else:
+            # This is not suppose to happen, just for safety (given
+            # dag_id and execution_date, drs should be either 0 or 1).
+            logging.error("Cannot find dag run with dag_id={} and " \
+                          "execution_date={}".format(dag.dag_id, execution_date))
 
     return res
