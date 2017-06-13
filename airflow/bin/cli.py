@@ -403,6 +403,7 @@ def run(args, dag=None):
     ti = TaskInstance(task, args.execution_date)
     ti.refresh_from_db()
 
+
     if args.local:
         print("Logging into: " + filename)
         run_job = jobs.LocalTaskJob(
