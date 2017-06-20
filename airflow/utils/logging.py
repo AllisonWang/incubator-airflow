@@ -19,6 +19,7 @@ from __future__ import unicode_literals
 
 from builtins import object
 
+import dateutil.parser
 import logging
 
 from airflow import configuration
@@ -211,3 +212,34 @@ class GCSLog(object):
             bucket = parsed_url.netloc
             blob = parsed_url.path.strip('/')
             return (bucket, blob)
+
+
+def get_log_filename(dag_id, task_id, execution_date, try_number):
+    """
+    Return full log filename: dag_id/task_id/execution_date/try_number.log
+    :arg dag_id: id of the dag
+    :arg task_id: id of the task
+    :arg execution_date: execution date of the task instance
+    :arg try_number: try_number of current task instance
+    """
+    relative_dir = get_log_directory(dag_id, task_id, execution_date)
+    filename = "{}/{}.log".format(relative_dir, try_number)
+
+    return filename
+
+
+def get_log_directory(dag_id, task_id, execution_date):
+    """
+    Return log directory path: dag_id/task_id/execution_date
+    :arg dag_id: id of the dag
+    :arg task_id: id of the task
+    :arg execution_date: execution date of the task instance
+    """
+    # execution_date could be parsed in as unicode character
+    # instead of datetime object.
+    if isinstance(execution_date, unicode):
+        execution_date = dateutil.parser.parse(execution_date)
+    iso = execution_date.isoformat()
+    relative_dir = '{}/{}/{}'.format(dag_id, task_id, iso)
+
+    return relative_dir

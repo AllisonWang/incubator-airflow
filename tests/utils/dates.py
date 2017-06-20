@@ -40,6 +40,21 @@ class Dates(unittest.TestCase):
             dates.days_ago(0, microsecond=3)
             == today_midnight + timedelta(microseconds=3))
 
+    def test_to_iso(self):
+        execution_date = datetime(2017, 1, 1, 12, 34, 56)
+        iso_expected = '2017-01-01T12:34:56'
 
-if __name__ == '__main__':
-    unittest.main()
+        iso = dates.to_iso(execution_date)
+        self.assertEqual(iso, iso_expected)
+
+        execution_date = '2017-01-01 12:34:56'
+        iso = dates.to_iso(execution_date)
+        self.assertEqual(iso, iso_expected)
+
+        execution_date = None
+        with self.assertRaises(TypeError):
+            iso = dates.to_iso(execution_date)
+
+        execution_date = 'some randome string'
+        with self.assertRaises(ValueError):
+            iso = dates.to_iso(execution_date)

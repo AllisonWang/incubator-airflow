@@ -344,19 +344,19 @@ def run(args, dag=None):
         dag = get_dag(args)
     elif not dag:
         session = settings.Session()
-        logging.info('Loading pickle id {args.pickle}'.format(**locals()))
+        logging.info('Loading pickle id {args.pickle}'.format(args=args))
         dag_pickle = session.query(
             DagPickle).filter(DagPickle.id == args.pickle).first()
         if not dag_pickle:
             raise AirflowException("Who hid the pickle!? [missing pickle]")
         dag = dag_pickle.pickle
-    task = dag.get_task(task_id=args.task_id)
 
+    task = dag.get_task(task_id=args.task_id)
     ti = TaskInstance(task, args.execution_date)
     ti.refresh_from_db()
+    try_number = ti.try_number
 
-    logger = logging.root
-    logger.handlers = []
+    logging.root.handlers = []
     if args.raw:
         # Output to STDOUT for the parent process to read and log
         logging.basicConfig(
@@ -364,8 +364,44 @@ def run(args, dag=None):
             level=settings.LOGGING_LEVEL,
             format=settings.LOG_FORMAT)
     else:
-        settings.airflow_logging.pre_task_logging(ti)
-        logger = settings.airflow_logging.get_task_logger(ti)
+        # Setting up logging to a file.
+
+        # To handle log writing when tasks are impersonated, the log files need to
+        # be writable by the user that runs the Airflow command and the user
+        # that is impersonated. This is mainly to handle corner cases with the
+        # SubDagOperator. When the SubDagOperator is run, all of the operators
+        # run under the impersonated user and create appropriate log files
+        # as the impersonated user. However, if the user manually runs tasks
+        # of the SubDagOperator through the UI, then the log files are created
+        # by the user that runs the Airflow command. For example, the Airflow
+        # run command may be run by the `airflow_sudoable` user, but the Airflow
+        # tasks may be run by the `airflow` user. If the log files are not
+        # writable by both users, then it's possible that re-running a task
+        # via the UI (or vice versa) results in a permission error as the task
+        # tries to write to a log file created by the other user.
+        log_base = os.path.expanduser(conf.get('core', 'BASE_LOG_FOLDER'))
+        log_relative_dir = logging_utils.get_log_directory(args.dag_id, args.task_id, args.execution_date)
+        directory = os.path.join(log_base, log_relative_dir)
+        # Create the log file and give it group writable permissions
+        # TODO(aoen): Make log dirs and logs globally readable for now since the SubDag
+        # operator is not compatible with impersonation (e.g. if a Celery executor is used
+        # for a SubDag operator and the SubDag operator has a different owner than the
+        # parent DAG)
+        if not os.path.isdir(directory):
+            # Create the directory as globally writable using custom mkdirs
+            # as os.makedirs doesn't set mode properly.
+            mkdirs(directory, 0o775)
+        filename = os.path.join(log_base, logging_utils.get_log_filename(
+            args.dag_id, args.task_id, args.execution_date, try_number))
+
+        if not os.path.exists(filename):
+            open(filename, "a").close()
+            os.chmod(filename, 0o666)
+
+        logging.basicConfig(
+            filename=filename,
+            level=settings.LOGGING_LEVEL,
+            format=settings.LOG_FORMAT)
 
     hostname = socket.getfqdn()
     logging.info("Running on host {}".format(hostname))
