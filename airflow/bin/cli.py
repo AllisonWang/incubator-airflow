@@ -343,6 +343,21 @@ def run(args, dag=None):
         settings.configure_vars()
         settings.configure_orm()
 
+    if not args.pickle and not dag:
+        dag = get_dag(args)
+    elif not dag:
+        session = settings.Session()
+        logging.info('Loading pickle id {args.pickle}'.format(args=args))
+        dag_pickle = session.query(
+            DagPickle).filter(DagPickle.id == args.pickle).first()
+        if not dag_pickle:
+            raise AirflowException("Who hid the pickle!? [missing pickle]")
+        dag = dag_pickle.pickle
+
+    task = dag.get_task(task_id=args.task_id)
+    ti = TaskInstance(task, args.execution_date)
+    ti.refresh_from_db()
+
     logging.root.handlers = []
     if args.raw:
         # Output to STDOUT for the parent process to read and log
@@ -366,19 +381,21 @@ def run(args, dag=None):
         # writable by both users, then it's possible that re-running a task
         # via the UI (or vice versa) results in a permission error as the task
         # tries to write to a log file created by the other user.
+        try_number = ti.try_number
         log_base = os.path.expanduser(conf.get('core', 'BASE_LOG_FOLDER'))
-        directory = log_base + "/{args.dag_id}/{args.task_id}".format(args=args)
+        log_relative_dir = logging_utils.get_log_directory(args.dag_id, args.task_id, args.execution_date)
+        directory = os.path.join(log_base, log_relative_dir)
         # Create the log file and give it group writable permissions
         # TODO(aoen): Make log dirs and logs globally readable for now since the SubDag
         # operator is not compatible with impersonation (e.g. if a Celery executor is used
         # for a SubDag operator and the SubDag operator has a different owner than the
         # parent DAG)
-        if not os.path.exists(directory):
+        if not os.path.isdir(directory):
             # Create the directory as globally writable using custom mkdirs
             # as os.makedirs doesn't set mode properly.
             mkdirs(directory, 0o775)
-        iso = args.execution_date.isoformat()
-        filename = "{directory}/{iso}".format(**locals())
+        filename = os.path.join(log_base, logging_utils.get_log_filename(
+            args.dag_id, args.task_id, args.execution_date, try_number))
 
         if not os.path.exists(filename):
             open(filename, "a").close()
@@ -389,20 +406,8 @@ def run(args, dag=None):
             level=settings.LOGGING_LEVEL,
             format=settings.LOG_FORMAT)
 
-    if not args.pickle and not dag:
-        dag = get_dag(args)
-    elif not dag:
-        session = settings.Session()
-        logging.info('Loading pickle id {args.pickle}'.format(**locals()))
-        dag_pickle = session.query(
-            DagPickle).filter(DagPickle.id == args.pickle).first()
-        if not dag_pickle:
-            raise AirflowException("Who hid the pickle!? [missing pickle]")
-        dag = dag_pickle.pickle
-    task = dag.get_task(task_id=args.task_id)
-
-    ti = TaskInstance(task, args.execution_date)
-    ti.refresh_from_db()
+    hostname = socket.getfqdn()
+    logging.info("Running on host {}".format(hostname))
 
     if args.local:
         print("Logging into: " + filename)
