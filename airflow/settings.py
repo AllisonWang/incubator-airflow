@@ -89,6 +89,8 @@ DAGS_FOLDER = None
 engine = None
 Session = None
 
+airflow_logging = None
+
 
 def policy(task_instance):
     """
@@ -153,6 +155,15 @@ try:
     logging.info("Loaded airflow_local_settings.")
 except:
     pass
+
+# Import custom airflow logging file `airflow_logging.py` from AIRFLOW_HOME,
+# or use default airflow logging configuration.
+try:
+    from airflow_logging import AirflowLogging
+except Exception:
+    from airflow.utils.log.airflow_logging import AirflowLogging
+
+airflow_logging = AirflowLogging()
 
 configure_logging()
 configure_vars()
