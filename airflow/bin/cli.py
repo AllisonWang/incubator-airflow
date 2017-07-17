@@ -21,6 +21,7 @@ import reprlib
 import os
 import subprocess
 import textwrap
+import warnings
 from importlib import import_module
 
 import argparse
@@ -50,6 +51,8 @@ from airflow.models import (DagModel, DagBag, TaskInstance,
                             Pool, Connection)
 from airflow.ti_deps.dep_context import (DepContext, SCHEDULER_DEPS)
 from airflow.utils import db as db_utils
+from airflow.utils import logging as logging_utils
+from airflow.utils.file import mkdirs
 from airflow.www.app import cached_app
 
 from sqlalchemy import func
@@ -340,22 +343,6 @@ def run(args, dag=None):
         settings.configure_vars()
         settings.configure_orm()
 
-    if not args.pickle and not dag:
-        dag = get_dag(args)
-    elif not dag:
-        session = settings.Session()
-        logging.info('Loading pickle id {args.pickle}'.format(args=args))
-        dag_pickle = session.query(
-            DagPickle).filter(DagPickle.id == args.pickle).first()
-        if not dag_pickle:
-            raise AirflowException("Who hid the pickle!? [missing pickle]")
-        dag = dag_pickle.pickle
-
-    task = dag.get_task(task_id=args.task_id)
-    ti = TaskInstance(task, args.execution_date)
-    ti.refresh_from_db()
-    try_number = ti.try_number
-
     logging.root.handlers = []
     if args.raw:
         # Output to STDOUT for the parent process to read and log
@@ -380,19 +367,18 @@ def run(args, dag=None):
         # via the UI (or vice versa) results in a permission error as the task
         # tries to write to a log file created by the other user.
         log_base = os.path.expanduser(conf.get('core', 'BASE_LOG_FOLDER'))
-        log_relative_dir = logging_utils.get_log_directory(args.dag_id, args.task_id, args.execution_date)
-        directory = os.path.join(log_base, log_relative_dir)
+        directory = log_base + "/{args.dag_id}/{args.task_id}".format(args=args)
         # Create the log file and give it group writable permissions
         # TODO(aoen): Make log dirs and logs globally readable for now since the SubDag
         # operator is not compatible with impersonation (e.g. if a Celery executor is used
         # for a SubDag operator and the SubDag operator has a different owner than the
         # parent DAG)
-        if not os.path.isdir(directory):
+        if not os.path.exists(directory):
             # Create the directory as globally writable using custom mkdirs
             # as os.makedirs doesn't set mode properly.
             mkdirs(directory, 0o775)
-        filename = os.path.join(log_base, logging_utils.get_log_filename(
-            args.dag_id, args.task_id, args.execution_date, try_number))
+        iso = args.execution_date.isoformat()
+        filename = "{directory}/{iso}".format(**locals())
 
         if not os.path.exists(filename):
             open(filename, "a").close()
@@ -403,10 +389,23 @@ def run(args, dag=None):
             level=settings.LOGGING_LEVEL,
             format=settings.LOG_FORMAT)
 
-    hostname = socket.getfqdn()
-    logging.info("Running on host {}".format(hostname))
+    if not args.pickle and not dag:
+        dag = get_dag(args)
+    elif not dag:
+        session = settings.Session()
+        logging.info('Loading pickle id {args.pickle}'.format(**locals()))
+        dag_pickle = session.query(
+            DagPickle).filter(DagPickle.id == args.pickle).first()
+        if not dag_pickle:
+            raise AirflowException("Who hid the pickle!? [missing pickle]")
+        dag = dag_pickle.pickle
+    task = dag.get_task(task_id=args.task_id)
+
+    ti = TaskInstance(task, args.execution_date)
+    ti.refresh_from_db()
 
     if args.local:
+        print("Logging into: " + filename)
         run_job = jobs.LocalTaskJob(
             task_instance=ti,
             mark_success=args.mark_success,
@@ -464,8 +463,42 @@ def run(args, dag=None):
     if args.raw:
         return
 
-    # Post task run logging operations
-    settings.airflow_logging.post_task_logging(ti)
+    # Force the log to flush, and set the handler to go back to normal so we
+    # don't continue logging to the task's log file. The flush is important
+    # because we subsequently read from the log to insert into S3 or Google
+    # cloud storage.
+    logging.root.handlers[0].flush()
+    logging.root.handlers = []
+
+    # store logs remotely
+    remote_base = conf.get('core', 'REMOTE_BASE_LOG_FOLDER')
+
+    # deprecated as of March 2016
+    if not remote_base and conf.get('core', 'S3_LOG_FOLDER'):
+        warnings.warn(
+            'The S3_LOG_FOLDER conf key has been replaced by '
+            'REMOTE_BASE_LOG_FOLDER. Your conf still works but please '
+            'update airflow.cfg to ensure future compatibility.',
+            DeprecationWarning)
+        remote_base = conf.get('core', 'S3_LOG_FOLDER')
+
+    if os.path.exists(filename):
+        # read log and remove old logs to get just the latest additions
+
+        with open(filename, 'r') as logfile:
+            log = logfile.read()
+
+        remote_log_location = filename.replace(log_base, remote_base)
+        # S3
+        if remote_base.startswith('s3:/'):
+            logging_utils.S3Log().write(log, remote_log_location)
+        # GCS
+        elif remote_base.startswith('gs:/'):
+            logging_utils.GCSLog().write(log, remote_log_location)
+        # Other
+        elif remote_base and remote_base != 'None':
+            logging.error(
+                'Unsupported remote log location: {}'.format(remote_base))
 
 
 def task_failed_deps(args):

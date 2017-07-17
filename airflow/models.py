@@ -103,7 +103,7 @@ else:
 _CONTEXT_MANAGER_DAG = None
 
 
-def clear_task_instances(tis, session, activate_dag_runs=True, dag=None):
+def clear_task_instances(tis, session, activate_dag_runs=True):
     """
     Clears a set of task instances, but makes sure the running ones
     get killed.
@@ -114,21 +114,12 @@ def clear_task_instances(tis, session, activate_dag_runs=True, dag=None):
             if ti.job_id:
                 ti.state = State.SHUTDOWN
                 job_ids.append(ti.job_id)
+        # todo: this creates an issue with the webui tests
+        # elif ti.state != State.REMOVED:
+        #     ti.state = State.NONE
+        #     session.merge(ti)
         else:
-            task_id = ti.task_id
-            if not dag or not dag.has_task(task_id):
-                # Ignore errors when updating max_tries if dag is None or
-                # task not found in dag since database records could be
-                # outdated. We make max_tries the maximum value of its
-                # original max_tries or the current task try number.
-                ti.max_tries = max(ti.max_tries, ti.try_number)
-            else:
-                task = dag.get_task(task_id)
-                task_retries = task.retries
-                ti.max_tries = ti.try_number + task_retries
-            ti.state = State.NONE
-            session.merge(ti)
-
+            session.delete(ti)
     if job_ids:
         from airflow.jobs import BaseJob as BJ
         for job in session.query(BJ).filter(BJ.id.in_(job_ids)).all():
@@ -1285,8 +1276,8 @@ class TaskInstance(Base):
         # not 0-indexed lists (i.e. Attempt 1 instead of
         # Attempt 0 for the first attempt).
         msg = "Starting attempt {attempt} of {total}".format(
-            attempt=self.try_number + 1,
-            total=self.max_tries + 1)
+            attempt=self.try_number % (task.retries + 1) + 1,
+            total=task.retries + 1)
         self.start_date = datetime.now()
 
         dep_context = DepContext(
@@ -1301,20 +1292,19 @@ class TaskInstance(Base):
             verbose=True)
 
         if not runnable and not mark_success:
-            # FIXME: we might have hit concurrency limits, which means we probably
-            # have been running prematurely. This should be handled in the
-            # scheduling mechanism.
-            self.state = State.NONE
-            msg = ("FIXME: Rescheduling due to concurrency limits reached at task "
-                   "runtime. Attempt {attempt} of {total}. State set to NONE.").format(
-                attempt=self.try_number + 1,
-                total=self.max_tries + 1)
-            logging.warning(hr + msg + hr)
+            if self.state != State.QUEUED:
+                # If a task's dependencies are met but it can't be run yet then queue it
+                # instead
+                self.state = State.QUEUED
+                msg = "Queuing attempt {attempt} of {total}".format(
+                    attempt=self.try_number % (task.retries + 1) + 1,
+                    total=task.retries + 1)
+                logging.info(hr + msg + hr)
 
-            self.queued_dttm = datetime.now()
-            msg = "Queuing into pool {}".format(self.pool)
-            logging.info(msg)
-            session.merge(self)
+                self.queued_dttm = datetime.now()
+                msg = "Queuing into pool {}".format(self.pool)
+                logging.info(msg)
+                session.merge(self)
             session.commit()
             return
 
@@ -1440,11 +1430,7 @@ class TaskInstance(Base):
 
         # Let's go deeper
         try:
-            # try_number is incremented by 1 during task instance run. So the
-            # current task instnace try_number is the try_number for next
-            # task instance run. We only mark task instance as FAILED if the
-            # next task instance try_number exceeds the max_tries.
-            if task.retries and self.try_number <= self.max_tries:
+            if task.retries and self.try_number % (task.retries + 1) != 0:
                 self.state = State.UP_FOR_RETRY
                 logging.info('Marking task as UP_FOR_RETRY')
                 if task.email_on_retry and task.email:
@@ -1599,14 +1585,15 @@ class TaskInstance(Base):
         task = self.task
         title = "Airflow alert: {self}".format(**locals())
         exception = str(exception).replace('\n', '<br>')
+        try_ = task.retries + 1
         body = (
-            "Try {try_number} out of {total_try}<br>"
+            "Try {self.try_number} out of {try_}<br>"
             "Exception:<br>{exception}<br>"
             "Log: <a href='{self.log_url}'>Link</a><br>"
             "Host: {self.hostname}<br>"
             "Log file: {self.log_filepath}<br>"
             "Mark success: <a href='{self.mark_success_url}'>Link</a><br>"
-        ).format(try_number=self.try_number + 1, total_try=self.max_tries + 1, **locals())
+        ).format(**locals())
         send_email(task.email, title, body)
 
     def set_duration(self):
@@ -2302,7 +2289,9 @@ class BaseOperator(object):
     def downstream_task_ids(self):
         return self._downstream_task_ids
 
-    def clear(self, start_date=None, end_date=None, upstream=False, downstream=False):
+    def clear(
+            self, start_date=None, end_date=None,
+            upstream=False, downstream=False):
         """
         Clears the state of task instances associated with the task, following
         the parameters specified.
@@ -2331,7 +2320,7 @@ class BaseOperator(object):
 
         count = qry.count()
 
-        clear_task_instances(qry.all(), session, dag=self.dag)
+        clear_task_instances(qry, session)
 
         session.commit()
         session.close()
@@ -3098,7 +3087,7 @@ class DAG(BaseDag, LoggingMixin):
             do_it = utils.helpers.ask_yesno(question)
 
         if do_it:
-            clear_task_instances(tis.all(), session, dag=self)
+            clear_task_instances(tis, session)
             if reset_dag_runs:
                 self.set_dag_runs_state(session=session)
         else:
