@@ -21,6 +21,7 @@ import reprlib
 import os
 import subprocess
 import textwrap
+import socket
 import warnings
 from importlib import import_module
 
