@@ -384,7 +384,8 @@ def run(args, dag=None):
         # tries to write to a log file created by the other user.
         try_number = ti.try_number
         log_base = os.path.expanduser(conf.get('core', 'BASE_LOG_FOLDER'))
-        log_relative_dir = logging_utils.get_log_directory(args.dag_id, args.task_id, args.execution_date)
+        log_relative_dir = logging_utils.get_log_directory(args.dag_id, args.task_id,
+                                                           args.execution_date)
         directory = os.path.join(log_base, log_relative_dir)
         # Create the log file and give it group writable permissions
         # TODO(aoen): Make log dirs and logs globally readable for now since the SubDag
@@ -395,8 +396,9 @@ def run(args, dag=None):
             # Create the directory as globally writable using custom mkdirs
             # as os.makedirs doesn't set mode properly.
             mkdirs(directory, 0o775)
-        filename = os.path.join(log_base, logging_utils.get_log_filename(
-            args.dag_id, args.task_id, args.execution_date, try_number))
+        log_relative = logging_utils.get_log_filename(
+            args.dag_id, args.task_id, args.execution_date, try_number)
+        filename = os.path.join(log_base, log_relative)
 
         if not os.path.exists(filename):
             open(filename, "a").close()
@@ -494,7 +496,8 @@ def run(args, dag=None):
         with open(filename, 'r') as logfile:
             log = logfile.read()
 
-        remote_log_location = filename.replace(log_base, remote_base)
+        remote_log_location = os.path.join(remote_base, log_relative)
+        logging.debug("Uploading to remote log location {}".format(remote_log_location))
         # S3
         if remote_base.startswith('s3:/'):
             logging_utils.S3Log().write(log, remote_log_location)
