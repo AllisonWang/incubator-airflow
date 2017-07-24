@@ -18,11 +18,6 @@
 {% extends "airflow/task_instance.html" %}
 {% block title %}Airflow - DAGs{% endblock %}
 
-{% block head_css %}
-  {{ super() }}
-  <link href="{{ url_for('static', filename='foundation.min.css') }}" rel="stylesheet">
-  <link href="{{ url_for('static', filename='log.css') }}" rel="stylesheet">
-{% endblock %}
 {% block body %}
   {{ super() }}
   <h4>{{ title }}</h4>
@@ -50,22 +45,11 @@
     // Time interval to wait before next log fetching. Default 2s.
     const DELAY = 2e3;
     // Distance away from page bottom to enable auto tailing.
-    const AUTO_TAILING_OFFSET = 50;
+    const AUTO_TAILING_OFFSET = 30;
     // Animation speed for auto tailing log display.
     const ANIMATION_SPEED = 1000;
-
+    // Total number of tabs to show.
     const TOTAL_ATTEMPTS = "{{ logs|length }}";
-
-    // Initialize a list of webworker for each corresponding tabs to
-    // highlight the logs in the background.
-    // TODO: use highlighting blocks instead of highlighting entire HTML5 tags
-    let workerArray = [];
-    for (let i = 0; i < TOTAL_ATTEMPTS; i++) {
-      const code = document.querySelector(`#try-${i+1}`);
-      const worker = new Worker("{{ url_for('static', filename='highlight-worker.js') }}");
-      worker.onmessage = function(event) { code.innerHTML = event.data; }
-      workerArray.push(worker);
-    }
 
     // Recursively fetch logs from flask endpoint.
     function recurse(delay=DELAY) {
@@ -84,17 +68,13 @@
           offset: null,
         },
       }).then(res => {
-        console.log(res);
         if (res && res.message) {
           $(`#try-${try_number}`).append(res.message + '\n');
-          // Background log highlighting.
-          const code = document.querySelector(`#try-${try_number}`);
-          workerArray[try_number-1].postMessage(code.textContent);
         }
       });
     }
 
-    // Streaming log with auto-tailing feature.
+    // Streaming log with auto-tailing.
     function autoTailingLog(try_number, offset=null) {
       return Promise.resolve(
         $.ajax({
@@ -107,8 +87,6 @@
             offset: offset,
           },
         })).then(res => {
-          console.log(`try_number [${try_number}] offset [${offset}] `);
-          console.log(res);
           if (res && res.message) {
             const docHeight = $(document).height();
             $(`#try-${try_number}`).append(res.message + '\n');
@@ -116,19 +94,16 @@
             if($(window).scrollTop() + $(window).height() > docHeight - AUTO_TAILING_OFFSET) {
               $("html, body").animate({ scrollTop: $(document).height() }, ANIMATION_SPEED);
             }
-            // Background log highlighting.
-            const code = document.querySelector(`#try-${try_number}`);
-            workerArray[try_number-1].postMessage(code.textContent);
           }
           return recurse().then(() => autoTailingLog(try_number, res.next_offset));
         });
     }
     $(document).ready(function() {
-      // Get non-latest task instance attempt logs.
+      // Lazily load past task instance logs.
       for(let i = 1; i < TOTAL_ATTEMPTS; i++) {
         staticLog(i);
       }
-      // Get latest attempt auto-tailing logs.
+      // Get latest attempt logs with auto-tailing feature.
       autoTailingLog(Math.max(TOTAL_ATTEMPTS, 1));
     });
   </script>

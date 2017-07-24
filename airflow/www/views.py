@@ -799,6 +799,7 @@ class Airflow(BaseView):
         dag_id = request.args.get('dag_id')
         task_id = request.args.get('task_id')
         execution_date = request.args.get('execution_date')
+        dttm = dateutil.parser.parse(execution_date)
         try_number = request.args.get('try_number')
         offset = request.args.get('offset')
 

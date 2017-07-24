@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from airflow import configuration
+from airflow import configuration, AirflowException
 from airflow.logging_backends.base_logging_backend import BaseLoggingBackend
 from airflow.utils.imports import import_class_by_name
 
@@ -26,9 +26,13 @@ LOGGING_BACKEND_ALIAS = {
 
 
 def cached_logging_backend():
+
+    if not configuration.get('core', 'logging_backend_url'):
+        return None
+
     global LOGGING_BACKEND
 
-    if LOGGING_BACKEND or not configuration.get('core', 'logging_backend_url'):
+    if LOGGING_BACKEND:
         return LOGGING_BACKEND
 
     url = configuration.get('core', 'logging_backend_url')
@@ -57,6 +61,6 @@ def _get_logging_backend(url):
     backend_cls = import_class_by_name(cls_name)
     backend = backend_cls(host)
     if not isinstance(backend, BaseLoggingBackend):
-        raise TypeError("Backend is not an instance of BaseLoggingBackend")
+        raise AirflowException("Backend is not an instance of BaseLoggingBackend")
 
     return backend
