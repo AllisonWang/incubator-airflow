@@ -478,36 +478,38 @@ def run(args, dag=None):
     logging.root.handlers[0].flush()
     logging.root.handlers = []
 
-    # store logs remotely
-    remote_base = conf.get('core', 'REMOTE_BASE_LOG_FOLDER')
+    # We still want to upload logs to S3 if logging backend is not enabled.
+    if not conf.get('core', 'logging_backend_url'):
+        # store logs remotely
+        remote_base = conf.get('core', 'REMOTE_BASE_LOG_FOLDER')
 
-    # deprecated as of March 2016
-    if not remote_base and conf.get('core', 'S3_LOG_FOLDER'):
-        warnings.warn(
-            'The S3_LOG_FOLDER conf key has been replaced by '
-            'REMOTE_BASE_LOG_FOLDER. Your conf still works but please '
-            'update airflow.cfg to ensure future compatibility.',
-            DeprecationWarning)
-        remote_base = conf.get('core', 'S3_LOG_FOLDER')
+        # deprecated as of March 2016
+        if not remote_base and conf.get('core', 'S3_LOG_FOLDER'):
+            warnings.warn(
+                'The S3_LOG_FOLDER conf key has been replaced by '
+                'REMOTE_BASE_LOG_FOLDER. Your conf still works but please '
+                'update airflow.cfg to ensure future compatibility.',
+                DeprecationWarning)
+            remote_base = conf.get('core', 'S3_LOG_FOLDER')
 
-    if os.path.exists(filename):
-        # read log and remove old logs to get just the latest additions
+        if os.path.exists(filename):
+            # read log and remove old logs to get just the latest additions
 
-        with open(filename, 'r') as logfile:
-            log = logfile.read()
+            with open(filename, 'r') as logfile:
+                log = logfile.read()
 
-        remote_log_location = os.path.join(remote_base, log_relative)
-        logging.debug("Uploading to remote log location {}".format(remote_log_location))
-        # S3
-        if remote_base.startswith('s3:/'):
-            logging_utils.S3Log().write(log, remote_log_location)
-        # GCS
-        elif remote_base.startswith('gs:/'):
-            logging_utils.GCSLog().write(log, remote_log_location)
-        # Other
-        elif remote_base and remote_base != 'None':
-            logging.error(
-                'Unsupported remote log location: {}'.format(remote_base))
+            remote_log_location = os.path.join(remote_base, log_relative)
+            logging.debug("Uploading to remote log location {}".format(remote_log_location))
+            # S3
+            if remote_base.startswith('s3:/'):
+                logging_utils.S3Log().write(log, remote_log_location)
+            # GCS
+            elif remote_base.startswith('gs:/'):
+                logging_utils.GCSLog().write(log, remote_log_location)
+            # Other
+            elif remote_base and remote_base != 'None':
+                logging.error(
+                    'Unsupported remote log location: {}'.format(remote_base))
 
 
 def task_failed_deps(args):
